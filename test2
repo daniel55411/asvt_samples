@@ -1,0 +1,17 @@
+first word end
+second line en
+end
+
+aaa sss
+ddd
+
+1 2 a
+
+a 1
+    a 1
+    	asd
+#!/usr/bin/env python3
+import sys, serial
+port = serial.Serial(sys.argv[1])
+print(port)
+port.close()

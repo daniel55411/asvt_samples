@@ -36,6 +36,8 @@ char uarts_timers[2] = {0, 0};
 
 volatile unsigned* rtc_vaddr;
 
+int last_chat_line;
+
 int getch();
 int kbhit();
 
@@ -175,7 +177,21 @@ void update_uart_timer(int uart_number) {
 }
 
 void flush_msg(int uart_number) {
-    // TODO: impl
+    if (last_chat_line < 59) {
+        printf("\x1b[s");
+        printf("\x1b[%d;2f", last_chat_line);
+        printf("%s: " uars_names[uart_number]);
+        print_uart_msg(uart_number);
+        printf("\x1b[u");
+        last_chat_line += 1;
+    } else {
+        //TODO: scrolling
+        printf("\x1b[s");
+        printf("\x1b[%d;2f", last_chat_line);
+        printf("%s: " uars_names[uart_number]);
+        print_uart_msg(uart_number);
+        printf("\x1b[u");
+    }
 }
 
 void flush_name(int uart_number) {
@@ -293,9 +309,9 @@ int main() {
     draw_ui();
 
     for (;;) {
+        ping();
         process_uarts();
         process_kb();
-        ping();
         check_timers();
     }
 

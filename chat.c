@@ -12,6 +12,8 @@
 #define uart2_bit    18
 
 volatile char name[15];
+int name_length;
+
 volatile char write_buffer[160]; 
 volatile int write_ptr;
 
@@ -20,10 +22,22 @@ volatile unsigned *uart_regs;
 
 int uarts_offsets[2] = {uart1_offset, uart2_offset};
 volatile int uarts_ptrs[2] = {0, 0};
+volatile int uarts_status[2] = {0, 0};
+volatile int uarts_states[2] = {0, 0};
 volatile char* uarts_buffers[2];
 
-int getche();
+int getch();
 int kbhit();
+
+int strlen(char* buffer) {
+    int i = 0;
+
+    while (buffer[i] != '\0') {
+        ++i;
+    }
+
+    return i;
+}
 
 void init_uarts() {
     int memfd = open("/dev/mem", O_RDWR | O_DSYNC);
@@ -89,26 +103,53 @@ void get_name() {
     fflush(0);
 }
 
+void clear_msg_wnd() {
+    for (int i = 21; i < 25; i++) {
+        printf("\x1b[%d;0f", i);
+        printf("%*s", terminal_width, "");
+    }
+
+    printf("\x1b[%d;%df", 21, 2);
+}
+
 void 
 
-int send_raw_message(char* buffer, int length) {
+void send_raw_message(char* buffer, int length) {
+    for (int i = 0; i < length; i++) {
+        for (int j = 0; j < 2; j++) {
+            if (uarts_status[j] == 1) {
+                while ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 5)) == 0);
 
+                uart_regs[(uarts_offsets[j] + 0x00)/4] = buffer[i];
+            }
+        }
+    }
 }
 
 int send_message() {
+    send_raw_message("\\M%c", write_ptr);
+    send_raw_message(write_buffer, write_ptr);
 
+    write_ptr = 0;
+    clear_msg_wnd();
 }
 
 void process_kb() {
     if (kbhit() > 0) {
-        char c = getche();
+        char c = getch();
 
-        if (c == '\n') {
+        if (c == '\n' || writer_ptr >= 160) {
             send_message();
+
+            if (c != '\n') {
+                writer_buffer[write_ptr] = c;
+                ++write_ptr;
+                printf("%c", c);
+            }
         } else {
             writer_buffer[write_ptr] = c;
             ++write_ptr;
-            // mod;
+            printf("%c", c);
         }
     }
 }
@@ -127,20 +168,36 @@ void process_uarts() {
             } else {
                 uarts_buffers[i][uarts_ptrs[i]] = c;
                 ++uarts_ptrs[i];
-                // mod;
             }
         }
     }
+}
+
+void ping() {
+    send_raw_message("\\P0", 3);
+}
+
+void who() {
+    send_raw_message("\\W0", 3);
+}
+
+void handshake() {
+    int len = strlen(name);
+
+    send_raw_message("\\H%c", len);
+    send_raw_message(name, len);
 }
 
 int main() {
     init_uarts();
     get_name();
     draw_ui();
+    handshake();
 
     for (;;) {
         process_uarts();
         process_kb();
+        ping();
     }
 
     return 0;

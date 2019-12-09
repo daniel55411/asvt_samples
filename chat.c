@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <fcntl.h>
 
 #define	rtc_base_addr	0x01f00000
 
@@ -30,7 +33,7 @@ int uarts_ptrs[2] = {0, 0};
 int uarts_status[2] = {0, 0};
 int uarts_states[2] = {0, 0};
 char* uarts_buffers[2];
-char* uarts_names[2] = {unknown, unknown};
+char* uarts_names[2];
 char uarts_lens[2] = {0, 0};
 char uarts_timers[2] = {0, 0};
 
@@ -51,18 +54,20 @@ int strlen(char* buffer) {
     return i;
 }
 
-void init_memfd() {
+int init_memfd() {
     memfd = open("/dev/mem", O_RDWR | O_DSYNC);
 
 	if (memfd == -1) {
 		printf("Ошибка открытия файла /dev/mem\n");
 		return 1;
 	}
+
+    return 0;
 }
 
 void init_timer() {
-    rtc_vaddr = (volatile unsigned*)mmap(NULL, 4096, P
-                    ROT_READ | PROT_WRITE, MAP_SHARED, memfd, rtc_base_addr);
+    rtc_vaddr = (volatile unsigned*)mmap(NULL, 4096, 
+                PROT_READ | PROT_WRITE, MAP_SHARED, memfd, rtc_base_addr);
 }
 
 void init_uarts() {
@@ -111,6 +116,8 @@ void draw_ui() {
     printf("\x1b[2E");
     printf("\x1b[%dG", terminal_width - 17);
     printf("%s", name);
+
+    printf("\x1b[21,4f");
 }
 
 void get_name() {
@@ -123,12 +130,12 @@ void get_name() {
 }
 
 void clear_msg_wnd() {
-    for (int i = 21; i < 25; i++) {
+    for (int i = 22; i < 25; i++) {
         printf("\x1b[%d;0f", i);
         printf("%*s", terminal_width, "");
     }
 
-    printf("\x1b[%d;%df", 21, 2);
+    printf("\x1b[%d;%df", 23, 2);
 }
 
 void send_raw_message(char* buffer, int length) {
@@ -143,6 +150,21 @@ void send_raw_message(char* buffer, int length) {
     }
 }
 
+void ping() {
+    send_raw_message("\\P0", 3);
+}
+
+void who() {
+    send_raw_message("\\W0", 3);
+}
+
+void handshake() {
+    int len = strlen(name);
+
+    send_raw_message("\\H%c", len);
+    send_raw_message(name, len);
+}
+
 int send_message() {
     send_raw_message("\\M%c", write_ptr);
     send_raw_message(write_buffer, write_ptr);
@@ -155,16 +177,16 @@ void process_kb() {
     if (kbhit() > 0) {
         char c = getch();
 
-        if (c == '\n' || writer_ptr >= 160) {
+        if (c == '\n' || write_ptr >= 160) {
             send_message();
 
             if (c != '\n') {
-                writer_buffer[write_ptr] = c;
+                write_buffer[write_ptr] = c;
                 ++write_ptr;
                 printf("%c", c);
             }
         } else {
-            writer_buffer[write_ptr] = c;
+            write_buffer[write_ptr] = c;
             ++write_ptr;
             printf("%c", c);
         }
@@ -176,11 +198,19 @@ void update_uart_timer(int uart_number) {
     uarts_status[uart_number] = 1;
 }
 
+void print_uart_msg(int uart_number) {
+    for (int i = 0; i < uarts_ptrs[uart_number]; i++) {
+        printf("%c", uarts_buffers[uart_number][i]);
+    }
+
+    uarts_ptrs[uart_number] = 0;
+}
+
 void flush_msg(int uart_number) {
     if (last_chat_line < 59) {
         printf("\x1b[s");
         printf("\x1b[%d;2f", last_chat_line);
-        printf("%s: " uars_names[uart_number]);
+        printf("%s: ", uarts_names[uart_number]);
         print_uart_msg(uart_number);
         printf("\x1b[u");
         last_chat_line += 1;
@@ -188,7 +218,7 @@ void flush_msg(int uart_number) {
         //TODO: scrolling
         printf("\x1b[s");
         printf("\x1b[%d;2f", last_chat_line);
-        printf("%s: " uars_names[uart_number]);
+        printf("%s: ", uarts_names[uart_number]);
         print_uart_msg(uart_number);
         printf("\x1b[u");
     }
@@ -204,22 +234,14 @@ void flush_name(int uart_number) {
 void clear_name(int uart_number) {
     printf("\x1b[s");
     printf("\x1b[%d;61f", uart_number);
-    prinft("%*s", 19, "");
+    printf("%*s", 19, "");
     printf("\x1b[u");
 }
 
-void print_uart_msg(int uart_number) {
-    for (int i = 0; i < uarts_ptrs[uart_number]; i++) {
-        printf("%c", uarts_buffers[uart_nubmer][i]);
-    }
-
-    uarts_ptrs[uart_number] = 0;
-}
-
 void process_uarts() {
-    for (int  i = 0; i < 2; i++) {
-        if ((uart_regs[(uarts_offsets[i] + 0x14)/4]  & (1 << 0)) == 1) {
-            char c = uart_regs[(uart1_offset + 0x00)/4];
+    for (int  j = 0; j < 2; j++) {
+        if ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 0)) == 1) {
+            char c = uart_regs[(uarts_offsets[j] + 0x00)/4];
 
             if (uarts_states[j] == 0 && c == '\\') {
                 uarts_states[j] = 1;
@@ -273,21 +295,6 @@ void process_uarts() {
     }
 }
 
-void ping() {
-    send_raw_message("\\P0", 3);
-}
-
-void who() {
-    send_raw_message("\\W0", 3);
-}
-
-void handshake() {
-    int len = strlen(name);
-
-    send_raw_message("\\H%c", len);
-    send_raw_message(name, len);
-}
-
 void check_timers() {
     for (int i = 0; i < 2; i++) {
         if (uarts_status[i] == 1) {
@@ -301,9 +308,16 @@ void check_timers() {
 }
 
 int main() {
-    init_memfd();
+    if (init_memfd() != 0) {
+        return 1;
+    }
+
     init_timer();
     init_uarts();
+
+    for (int i = 0; i < 2; i++) {
+        uarts_names[i] = unknown;
+    }
 
     get_name();
     draw_ui();

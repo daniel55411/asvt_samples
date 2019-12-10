@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <fcntl.h>
@@ -35,9 +36,10 @@ int uarts_states[2] = {0, 0};
 char* uarts_buffers[2];
 char* uarts_names[2];
 char uarts_lens[2] = {0, 0};
-char uarts_timers[2] = {0, 0};
+unsigned uarts_timers[2] = {0, 0};
 
 volatile unsigned* rtc_vaddr;
+unsigned last_time;
 
 int last_chat_line;
 
@@ -68,6 +70,8 @@ int init_memfd() {
 void init_timer() {
     rtc_vaddr = (volatile unsigned*)mmap(NULL, 4096, 
                 PROT_READ | PROT_WRITE, MAP_SHARED, memfd, rtc_base_addr);
+    
+    last_time = rtc_vaddr[5];
 }
 
 void init_uarts() {
@@ -86,11 +90,13 @@ void init_uarts() {
 	ccu_regs[0x02D8/4] |= 1<<uart2_bit; 
 
 	uart_regs[(uart1_offset + 0x0C)/4] |= 0b10000011;
+    uart_regs[(uart1_offset + 0x08)/4] |= 0b00000001;
 	uart_regs[(uart1_offset + 0x00)/4] = 78;
 	uart_regs[(uart1_offset + 0x04)/4] = 0;
 	uart_regs[(uart1_offset + 0x0C)/4] &= ~0b10000000;
 
     uart_regs[(uart2_offset + 0x0C)/4] |= 0b10000011;
+    uart_regs[(uart2_offset + 0x08)/4] |= 0b00000001;
 	uart_regs[(uart2_offset + 0x00)/4] = 78;
 	uart_regs[(uart2_offset + 0x04)/4] = 0;
 	uart_regs[(uart2_offset + 0x0C)/4] &= ~0b10000000;
@@ -117,15 +123,14 @@ void draw_ui() {
     printf("\x1b[%dG", terminal_width - 17);
     printf("%s", name);
 
-    printf("\x1b[21,4f");
+    printf("\x1b[23,3f");
 }
 
 void get_name() {
     printf("\x1b[H\x1b[2J");
     printf("\x1b[%d;%df", terminal_height / 2, terminal_width / 2 - 20);
     printf("Введите логин: ");
-    scanf("%15s", name);
-    getchar();
+    scanf("%s", name);
     fflush(0);
 }
 
@@ -135,13 +140,32 @@ void clear_msg_wnd() {
         printf("%*s", terminal_width, "");
     }
 
-    printf("\x1b[%d;%df", 23, 2);
+    printf("\x1b[23;3f");
 }
 
-void send_raw_message(char* buffer, int length) {
+void flush_me_msg() {
+    if (last_chat_line < 59) {
+        printf("\x1b[s");
+        printf("\x1b[%d;2f", last_chat_line);
+        write_buffer[write_ptr] = '\0';
+        printf("me: %s", write_buffer);
+        printf("\x1b[u");
+        last_chat_line += 1;
+    } else {
+        //TODO: scrolling
+        printf("\x1b[s");
+        printf("\x1b[%d;2f", last_chat_line);
+        write_buffer[write_ptr] = '\0';
+        printf("me: %s", write_buffer);
+        printf("\x1b[u");
+    }
+}
+
+
+void send_raw_message(char* buffer, int length, int force) {
     for (int i = 0; i < length; i++) {
         for (int j = 0; j < 2; j++) {
-            if (uarts_status[j] == 1) {
+            if (force == 1 || uarts_status[j] == 1) {
                 while ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 5)) == 0);
 
                 uart_regs[(uarts_offsets[j] + 0x00)/4] = buffer[i];
@@ -151,24 +175,29 @@ void send_raw_message(char* buffer, int length) {
 }
 
 void ping() {
-    send_raw_message("\\P0", 3);
+    if (rtc_vaddr[5] - last_time > 2) {
+        send_raw_message("\\P0", 3, 1);
+        last_time = rtc_vaddr[5];
+    }
 }
 
 void who() {
-    send_raw_message("\\W0", 3);
+    send_raw_message("\\W0", 3, 1);
 }
 
 void handshake() {
-    int len = strlen(name);
+    char len = strlen(name);
 
-    send_raw_message("\\H%c", len);
-    send_raw_message(name, len);
+    send_raw_message("\\H", 2, 0);
+    send_raw_message(&len, 1, 0);
+    send_raw_message(name, len, 0);
 }
 
 int send_message() {
-    send_raw_message("\\M%c", write_ptr);
-    send_raw_message(write_buffer, write_ptr);
+    send_raw_message("\\M%c", write_ptr, 0);
+    send_raw_message(write_buffer, write_ptr, 0);
 
+    flush_me_msg();
     write_ptr = 0;
     clear_msg_wnd();
 }
@@ -224,17 +253,26 @@ void flush_msg(int uart_number) {
     }
 }
 
-void flush_name(int uart_number) {
+void clear_uart_name(int uart_number) {
     printf("\x1b[s");
-    printf("\x1b[%d;61f", uart_number);
-    print_uart_msg(uart_number);
+    printf("\x1b[%d;61f", uart_number + 2);
+    printf("%*s", 19, "");
     printf("\x1b[u");
 }
 
-void clear_name(int uart_number) {
+void flush_uart_name(int uart_number) {
+    clear_uart_name(uart_number);
+
+    // printf("%d %d--", uart_number, uarts_ptrs[uart_number]);
+
+    if (uarts_ptrs[uart_number] > 0) {
+        uarts_names[uart_number] = uarts_buffers[uart_number];
+        uarts_names[uart_number][uarts_ptrs[uart_number]] = '\0';
+    }
+
     printf("\x1b[s");
-    printf("\x1b[%d;61f", uart_number);
-    printf("%*s", 19, "");
+    printf("\x1b[%d;64f", uart_number + 2);
+    printf("%s", uarts_names[uart_number]);
     printf("\x1b[u");
 }
 
@@ -243,53 +281,64 @@ void process_uarts() {
         if ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 0)) == 1) {
             char c = uart_regs[(uarts_offsets[j] + 0x00)/4];
 
+            // printf("%d %d %c %d-", j, uarts_states[j], c, uarts_ptrs[j]); 
+
             if (uarts_states[j] == 0 && c == '\\') {
                 uarts_states[j] = 1;
             } else if (uarts_states[j] == 1 && (c == 'M' || c == 'H')){
                 uarts_states[j] = c * 1000;
-            } else if (uarts_states[j] % 1000 == 0) {
+            } else if (uarts_states[j] > 1000 && uarts_states[j] % 1000 == 0) {
                 if (c == 0) {
                     uarts_names[j] = unknown;
                     uarts_status[j] = 0;
-                    clear_name(j);
+                    clear_uart_name(j);
                 }
 
                 uarts_lens[j] = c;
                 uarts_states[j] += 1;
-            } else if (uarts_states[j] % 1000 - 1 < uarts_lens[j]) {
+                // printf("%d %d -- ", j, uarts_lens[j]);
+            } else if (uarts_states[j] > 1000 && uarts_states[j] % 1000 - 1 < uarts_lens[j]) {
                 uarts_states[j] += 1;
+                // printf("%d %d ++ ", j, uarts_states[j] % 1000 - 1);
 
-                if (uarts_states[j] - 1 % 1000 >= 45) {
+                if ((uarts_states[j] - 1) % 1000 >= 45) {
                     if ((uarts_states[j] / 1000) == 'H') {
-                        flush_name(j);
+                        flush_uart_name(j);
                     } else {
                         flush_msg(j);
                     }
+                    uarts_ptrs[j] = 0;
                 } else {
                     uarts_buffers[j][uarts_ptrs[j]] = c;
                     uarts_ptrs[j] += 1;
                 }
-            } else if (uarts_states[j] % 1000 - 1 == uarts_lens[j]) {
+            } else if (uarts_states[j] > 1000 && uarts_states[j] % 1000 - 1 == uarts_lens[j]) {
                 if ((uarts_states[j] / 1000) == 'H') {
-                    flush_name(j);
+                    flush_uart_name(j);
                 } else {
                     flush_msg(j);
                 }
 
                 uarts_states[j] = 0;
+                uarts_ptrs[j] = 0;
+                update_uart_timer(j);
             } else if (uarts_states[j] == 1 && c == 'P') {
                 uarts_states[j] = 5;
 
                 if (uarts_status[j] == 0) {
                     who();
+                    flush_uart_name(j);
                 }
-
-                update_uart_timer(j);
             } else if (uarts_states[j] == 1 && c == 'W') {
                 uarts_states[j] = 5;
                 handshake();
+            } else if (uarts_states[j] == 5) {
+                uarts_states[j] = 0;
+                uarts_ptrs[j] = 0;
+                update_uart_timer(j);
             } else {
                 uarts_states[j] = 0;
+                uarts_ptrs[j] = 0;
             }
         }
     }
@@ -301,7 +350,7 @@ void check_timers() {
             if (rtc_vaddr[5] - uarts_timers[i] > 3) {
                 uarts_status[i] = 0;
                 uarts_names[i] = unknown;
-                clear_name(i);
+                clear_uart_name(i);
             }
         }
     }
@@ -317,6 +366,7 @@ int main() {
 
     for (int i = 0; i < 2; i++) {
         uarts_names[i] = unknown;
+        uarts_buffers[i] = malloc(250);
     }
 
     get_name();
@@ -327,6 +377,7 @@ int main() {
         process_uarts();
         process_kb();
         check_timers();
+        fflush(0);
     }
 
     return 0;

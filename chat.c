@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -19,12 +20,12 @@
 
 int memfd;
 
-char* unknown = "unknown";
+const char* unknown = "unknown";
 char name[15];
 int name_length;
 
 char write_buffer[160]; 
-int write_ptr;
+char write_ptr;
 
 volatile unsigned *ccu_regs;
 volatile unsigned *uart_regs;
@@ -45,16 +46,6 @@ int last_chat_line;
 
 int getch();
 int kbhit();
-
-int strlen(char* buffer) {
-    int i = 0;
-
-    while (buffer[i] != '\0') {
-        ++i;
-    }
-
-    return i;
-}
 
 int init_memfd() {
     memfd = open("/dev/mem", O_RDWR | O_DSYNC);
@@ -194,7 +185,8 @@ void handshake() {
 }
 
 int send_message() {
-    send_raw_message("\\M%c", write_ptr, 0);
+    send_raw_message("\\M", 2, 0);
+    send_raw_message(&write_ptr, 1, 0);
     send_raw_message(write_buffer, write_ptr, 0);
 
     flush_me_msg();
@@ -263,10 +255,9 @@ void clear_uart_name(int uart_number) {
 void flush_uart_name(int uart_number) {
     clear_uart_name(uart_number);
 
-    // printf("%d %d--", uart_number, uarts_ptrs[uart_number]);
-
-    if (uarts_ptrs[uart_number] > 0) {
-        uarts_names[uart_number] = uarts_buffers[uart_number];
+    if (uarts_ptrs[uart_number] > 0 
+        && (uarts_states[uart_number] / 1000) == 'H') {
+        memcpy(uarts_names[uart_number], uarts_buffers[uart_number], uarts_ptrs[uart_number]);
         uarts_names[uart_number][uarts_ptrs[uart_number]] = '\0';
     }
 
@@ -278,7 +269,7 @@ void flush_uart_name(int uart_number) {
 
 void process_uarts() {
     for (int  j = 0; j < 2; j++) {
-        if ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 0)) == 1) {
+        while ((uart_regs[(uarts_offsets[j] + 0x14)/4]  & (1 << 0)) == 1) {
             char c = uart_regs[(uarts_offsets[j] + 0x00)/4];
 
             // printf("%d %d %c %d-", j, uarts_states[j], c, uarts_ptrs[j]); 
@@ -289,7 +280,7 @@ void process_uarts() {
                 uarts_states[j] = c * 1000;
             } else if (uarts_states[j] > 1000 && uarts_states[j] % 1000 == 0) {
                 if (c == 0) {
-                    uarts_names[j] = unknown;
+                    memcpy(uarts_names[j], unknown, 7);
                     uarts_status[j] = 0;
                     clear_uart_name(j);
                 }
@@ -308,11 +299,13 @@ void process_uarts() {
                         flush_msg(j);
                     }
                     uarts_ptrs[j] = 0;
+                    update_uart_timer(j);
                 } else {
                     uarts_buffers[j][uarts_ptrs[j]] = c;
                     uarts_ptrs[j] += 1;
                 }
             } else if (uarts_states[j] > 1000 && uarts_states[j] % 1000 - 1 == uarts_lens[j]) {
+                // printf("%d %d %c %d-", j, uarts_states[j], c, uarts_ptrs[j]); 
                 if ((uarts_states[j] / 1000) == 'H') {
                     flush_uart_name(j);
                 } else {
@@ -325,7 +318,7 @@ void process_uarts() {
             } else if (uarts_states[j] == 1 && c == 'P') {
                 uarts_states[j] = 5;
 
-                if (uarts_status[j] == 0) {
+                if (uarts_status[j] == 0 || strcmp(uarts_names[j], unknown) != 0) {
                     who();
                     flush_uart_name(j);
                 }
@@ -339,6 +332,7 @@ void process_uarts() {
             } else {
                 uarts_states[j] = 0;
                 uarts_ptrs[j] = 0;
+                update_uart_timer(j);
             }
         }
     }
@@ -347,9 +341,9 @@ void process_uarts() {
 void check_timers() {
     for (int i = 0; i < 2; i++) {
         if (uarts_status[i] == 1) {
-            if (rtc_vaddr[5] - uarts_timers[i] > 3) {
+            if (rtc_vaddr[5] - uarts_timers[i] > 5) {
                 uarts_status[i] = 0;
-                uarts_names[i] = unknown;
+                memcpy(uarts_names[i], unknown, 7);
                 clear_uart_name(i);
             }
         }
@@ -365,7 +359,8 @@ int main() {
     init_uarts();
 
     for (int i = 0; i < 2; i++) {
-        uarts_names[i] = unknown;
+        uarts_names[i] = malloc(250);
+        memcpy(uarts_names[i], unknown, 7);
         uarts_buffers[i] = malloc(250);
     }
 

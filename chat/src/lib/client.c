@@ -38,3 +38,7 @@ void update_client_activity(client_t* client) {
     client->last_activity = get_current_time();
     client->status = Online;
 }
+
+void set_unknown_name(client_t* client) {
+    client->name = _DEFAULT_NAME;
+}

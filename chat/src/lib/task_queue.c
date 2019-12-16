@@ -44,9 +44,14 @@ void run_task() {
     if (round_robin == _MAX_PRIORITY) {
         round_robin = 0;
     } else {
+        task_t* task = _TASK_QUEUE_BASE[round_robin];
         void *args = _TASK_QUEUE_BASE[round_robin]->args;
-        _TASK_QUEUE_BASE[round_robin]->exec(args);
-        _TASK_QUEUE_BASE[round_robin] = _TASK_QUEUE_BASE[round_robin]->next_task;
+
+        task->exec(args);
+        _TASK_QUEUE_BASE[round_robin] = task->next_task;
         round_robin = (round_robin + 1) % _MAX_PRIORITY;
+        
+        free(task);
+        free(args);
     }
 }

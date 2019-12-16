@@ -5,6 +5,7 @@
 #include "lib/common.c"
 #include "lib/thread.c"
 #include "lib/client.c"
+#include "lib/task_queue.c"
 
 
 #define _BUFFER_CAP 1024
@@ -104,6 +105,14 @@ int uart_read_routine(void* args) {
     }
 }
 
+int task_queue_routine(void* args) {
+    init_task_queue();
+
+    for (;;) {
+        run_task();
+    }
+}
+
 void run_app() {
     _KB_RING_BUFFER = init_ring_buffer(_BUFFER_CAP);
     _CLIENTS[0] = init_client();
@@ -123,4 +132,6 @@ void run_app() {
     new_thread(uart_read_routine, args);
     args[0] = 2;
     new_thread(uart_read_routine, args);
+
+    task_queue_routine(NULL);    
 }

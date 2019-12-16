@@ -1,38 +1,40 @@
 #include "ring_buffer.c"
 
+typedef struct task_t {
+    void(*exec) (void* args);
+    void* args;
+    task_t* next_task;
+} task_t;
 
-buffer_t* _TASK_QUEUE;
+task_t* _TASK_QUEUE_HEAD;
+task_t* _TASK_QUEUE_BASE;
 
-void add_task(void(*task)(void* args), void* args) {
-    char* ptr_val;
-    ptr_val = (char*)&task;
-    
-    for (int i = 0; i < sizeof(char*); ++i) {
-        add_to_buffer(_TASK_QUEUE, ptr_val[i]);
-    }
-
-    ptr_val = (char*)&args;
-
-    for (int i = 0; i < sizeof(char*); ++i) {
-        add_to_buffer(_TASK_QUEUE, ptr_val[i]);
-    }
-
-    free(ptr_val);
+void init_task_queue() {
+    _TASK_QUEUE_HEAD = NULL;
+    _TASK_QUEUE_BASE = NULL;
 }
 
+//TODO: make thread safe 
+void add_task(void(*task)(void* args), void* args) {
+    task_t task = {
+        .exec = task,
+        .args = args,
+        .next_task = NULL,
+    };
+    task_t* task_ptr = &task;
+
+    if (_TASK_QUEUE_BASE == NULL) {
+        _TASK_QUEUE_HEAD = _TASK_QUEUE_BASE = task_ptr;
+    } else {
+        _TASK_QUEUE_HEAD->next_task = task_ptr;
+        _TASK_QUEUE_HEAD = task_ptr;
+    }
+}
+
+//TODO: make thread safe
 void run_task() {
-    char* ptr_val;
-    void(*task)(void *args);
-    void* args;
-
-    extract_from_buffer(ptr_val, _TASK_QUEUE, sizeof(char*));
-    task = *ptr_val;
-    extract_from_buffer(ptr_val, _TASK_QUEUE, sizeof(char*));
-    args = *ptr_val;
-
-    task(args);
-    
-    free(ptr_val);
-    free(task);
-    free(args);
+    if (_TASK_QUEUE_BASE != NULL) {
+        _TASK_QUEUE_BASE->exec(_TASK_QUEUE_BASE->args);
+        _TASK_QUEUE_BASE = _TASK_QUEUE_BASE->next_task;
+    }
 }

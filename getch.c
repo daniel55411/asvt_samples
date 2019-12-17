@@ -2,7 +2,6 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/select.h>
-#include <stropts.h>
 
 //
 // getche() - ввод одного символа + эхо
